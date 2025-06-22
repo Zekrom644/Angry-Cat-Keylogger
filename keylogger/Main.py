@@ -1,15 +1,17 @@
 import sys
 import socket
 import threading
-from client2 import Ui_Widget2
-from client3 import Ui_Widget3
-from client4 import Ui_Widget4
-from client5 import Ui_Widget5
+from clients.client2 import Ui_Widget2
+from clients.client3 import Ui_Widget3
+from clients.client4 import Ui_Widget4
+from clients.client5 import Ui_Widget5
+
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTextEdit, QVBoxLayout, QWidget, QLabel
-from keylogger.Dashboard import Ui_MainWindow
-from SetComputerInfo import Ui_SetComputerInfo
-from SetEmailInfo import Ui_SetEmaiInfo
+from gui.controllers.Dashboard import Ui_MainWindow
+from gui.controllers.SetComputerInfo import Ui_SetComputerInfo
+from gui.controllers.SetEmailInfo import Ui_SetEmaiInfo
 from PyQt5.QtCore import pyqtSignal, QObject
+
 
 
 class ClientWindow(QMainWindow):
