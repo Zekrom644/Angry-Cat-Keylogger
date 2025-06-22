@@ -1,0 +1,20 @@
+# Bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# PyCharm project files
+.idea/
+
+# Virtual environment
+.venv/
+
+# Logs and certs
+*.log
+*.pem
+
+# UI-generated files if you don’t want to track them
+# keylogger/gui/controllers/*.py
+
+# Temporary files
+structure.txt

